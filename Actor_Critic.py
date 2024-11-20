@@ -1,49 +1,61 @@
 import numpy as np
 import tensorflow as tf
 from tensorflow.keras.optimizers import Adam
-from tensorflow_probability import distributions as tfp
+import tensorflow_probability as tfp
 from networks import ActorCriticNetwork
 
-class Agent:
-    def __init__(self, alpha=0.0003, gamma=0.99, n_actions=2):
+class ActorCriticAgent:
+    def __init__(self, alpha=0.001, gamma=0.99, n_actions=2):
         self.gamma = gamma
+        self.action = None
         self.actor_critic = ActorCriticNetwork(n_actions=n_actions)
-        self.actor_critic.compile(optimizer=Adam(learning_rate=alpha))
+        self.actor_critic.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=alpha))
+        
 
-    def choose_action(self, observation):
-        state = tf.convert_to_tensor([observation], dtype=tf.float32)
+    def select_action(self, state):
+        state = tf.convert_to_tensor([state], dtype=tf.float32)
         mu, sigma, _ = self.actor_critic(state)
-        dist = tfp.Normal(mu, sigma)
-        action = dist.sample()
-        action = tf.clip_by_value(action, -1, 1)  # Ensure actions stay within bounds
+
+        mu = tf.cast(mu, tf.float32)
+        sigma = tf.cast(sigma, tf.float32)
+        
+        dist = tfp.distributions.Normal(mu, sigma)
+        action = tf.clip_by_value(dist.sample(), -1, 1)
         log_prob = dist.log_prob(action)
-        return action[0].numpy(), log_prob
+        self.action = action
+        # print(f"State: {state.numpy()}, Mu: {mu.numpy()}, Sigma: {sigma.numpy()}, Action: {action.numpy()}")
+        return action.numpy()[0], log_prob
 
+    def save_models(self):
+        print('... saving models ...')
+        self.actor_critic.save_weights(self.actor_critic.checkpoint_file)
 
-    def learn(self, state, reward, state_, done, log_prob):
+    def load_models(self):
+        print('... loading models ...')
+        self.actor_critic.load_weights(self.actor_critic.checkpoint_file)
+
+    def learn(self, state, action, reward, state_, done, log_prob):
         state = tf.convert_to_tensor([state], dtype=tf.float32)
         state_ = tf.convert_to_tensor([state_], dtype=tf.float32)
         reward = tf.convert_to_tensor(reward, dtype=tf.float32)
-
-        with tf.GradientTape() as tape:
+        
+        with tf.GradientTape(persistent=True) as tape:
             mu, sigma, value = self.actor_critic(state)
-            _, _, next_value = self.actor_critic(state_)
-
+            _, _, value_ = self.actor_critic(state_)
             value = tf.squeeze(value)
-            next_value = tf.squeeze(next_value)
-
-            delta = reward + self.gamma * next_value * (1 - int(done)) - value
+            value_ = tf.squeeze(value_)
+            dist = tfp.distributions.Normal(tf.cast(mu, tf.float32), tf.cast(sigma, tf.float32))
+            log_prob = dist.log_prob(self.action)
+            delta = reward + self.gamma * value_ * (1 - int(done)) - value
             critic_loss = delta**2
-
-            dist = tfp.Normal(mu, sigma)
+            
             actor_loss = -log_prob * delta
-            total_loss = actor_loss + critic_loss
+            entropy_bonus = tf.reduce_mean(dist.entropy())  # Higher entropy encourages exploration
+            actor_loss -= 0.01 * entropy_bonus
+            total_loss = critic_loss + actor_loss
+        
+        grads = tape.gradient(total_loss, self.actor_critic.trainable_variables)
+        for var, grad in zip(self.actor_critic.trainable_variables, grads):
+            if grad is None or tf.reduce_mean(grad).numpy() == 0:
+                print(f"Zero gradient for {var.name}")
 
-        gradients = tape.gradient(total_loss, self.actor_critic.trainable_variables)
-
-        # Debug missing gradients
-        for var, grad in zip(self.actor_critic.trainable_variables, gradients):
-            if grad is None:
-                print(f"Gradient missing for variable: {var.name}")
-
-        self.actor_critic.optimizer.apply_gradients(zip(gradients, self.actor_critic.trainable_variables))

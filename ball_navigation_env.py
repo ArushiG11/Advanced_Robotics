@@ -1,77 +1,56 @@
+import gymnasium as gym
 import mujoco
 import numpy as np
-import glfw
 
-class BallNavigationEnv:
-    def __init__(self, xml_path, goal_pos=[0.9, 0.0], epsilon=0.05):
+class BallNavigationEnv(gym.Env):
+    def __init__(self, xml_path='nav1.xml', goal_coords=np.array([0.9, 0.0]), goal_threshold=0.1):
         self.model = mujoco.MjModel.from_xml_path(xml_path)
         self.data = mujoco.MjData(self.model)
-        self.renderer = None
-        self.goal_pos = np.array(goal_pos)
-        self.epsilon = epsilon
+        self.goal_coords = goal_coords
+        self.goal_threshold = goal_threshold
 
-        # Action bounds (-1, 1) for x and y forces
-        self.action_low = -1
-        self.action_high = 1
-        self.n_actions = 2
-
-        # State dimensions (x, y, vx, vy)
-        self.state_dim = 4
-
-    def step(self, action):
-        # Apply action: Set control forces
-        self.data.ctrl[0] = np.clip(action[0], self.action_low, self.action_high)
-        self.data.ctrl[1] = np.clip(action[1], self.action_low, self.action_high)
-
-        # Step simulation
-        mujoco.mj_step(self.model, self.data)
-
-        # Get state
-        position = self.data.qpos[:2]  # [x, y]
-        velocity = self.data.qvel[:2]  # [vx, vy]
-        state = np.concatenate([position, velocity])
-
-        # Calculate reward and check if done
-        reward = 1 if np.linalg.norm(position - self.goal_pos) <= self.epsilon else 0
-        done = reward > 0  # Episode ends when target is reached
-
-        return state, reward, done
+        # Define action and observation spaces
+        self.action_space = gym.spaces.Box(low=-1, high=1, shape=(2,), dtype=np.float32)
+        self.observation_space = gym.spaces.Box(low=-np.inf, high=np.inf, shape=(4,), dtype=np.float32)
 
     def reset(self):
-        # Reset the simulation
-        mujoco.mj_resetData(self.model, self.data)
+        # Randomize the ball's initial position and velocity
+        self.data.qpos[:2] = np.random.uniform(-0.5, 0.5, size=2).astype(np.float32)
+        self.data.qvel[:2] = np.zeros(2, dtype=np.float32)
+        mujoco.mj_step(self.model, self.data)
+        return self._get_state()
 
-        # Randomize initial position
-        init_pos = np.random.uniform(-0.5, 0.5, size=2)
-        self.data.qpos[:] = np.append(init_pos)
-        self.data.qvel[:] = 0
-        mujoco.mj_forward(self.model, self.data)
-        # Return initial state
-        position = self.data.qpos[:2]
-        velocity = self.data.qvel[:2]
-        state = np.concatenate([position, velocity])
-        return state
+    def step(self, action):
+        # Add noise to the action as per the assignment
+        noise = np.random.normal(0, 0.1, size=2)
+        self.data.ctrl[:2] = action + noise
 
-    def render(self):
-        if self.renderer is None:
-            # Initialize GLFW-based renderer
-            if not glfw.init():
-                raise Exception("GLFW failed to initialize")
+        # Simulate one timestep
+        mujoco.mj_step(self.model, self.data)
 
-            window = glfw.create_window(800, 600, "Ball Navigation", None, None)
-            glfw.make_context_current(window)
-            self.renderer = (window, mujoco.MjrContext(self.model, mujoco.mjtFontScale.mjFONTSCALE_150))
+        # Retrieve state and calculate reward
+        state = self._get_state()
+        reward = self._compute_reward(state)
+        done = self._check_termination(state)
+        # print(f"State: {state[:2]}, Goal: {self.goal_coords}, Reward: {reward}")
+        return state, reward, done, {}
 
-        window, mjr_context = self.renderer
+    def _get_state(self):
+        # Combine position and velocity into a single state vector
+        pos = self.data.qpos[:2].astype(np.float32)
+        vel = self.data.qvel[:2].astype(np.float32)
+        return np.concatenate([pos, vel])
 
-        if not glfw.window_should_close(window):
-            mujoco.mjv_updateScene(self.model, self.data, mujoco.MjvOption(), None, mujoco.MjvScene())
-            mujoco.mjr_render(mujoco.MjrRect(0, 0, 800, 600), mujoco.MjvScene(), mjr_context)
-            glfw.swap_buffers(window)
-            glfw.poll_events()
+    def _compute_reward(self, state):
+        distance = np.linalg.norm(state[:2] - self.goal_coords)
+        
+        # Reward for reaching the goal
+        if distance <= self.goal_threshold:
+            return 1
+        
+        # Penalty proportional to distance from the goal
+        return -distance
 
-    def close(self):
-        if self.renderer:
-            window, _ = self.renderer
-            glfw.destroy_window(window)
-            glfw.terminate()
+    def _check_termination(self, state):
+        distance = np.linalg.norm(state[:2] - self.goal_coords)
+        return distance <= self.goal_threshold
