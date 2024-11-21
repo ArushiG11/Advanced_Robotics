@@ -3,7 +3,7 @@ import mujoco
 import numpy as np
 
 class BallNavigationEnv(gym.Env):
-    def __init__(self, xml_path='nav1.xml', goal_coords=np.array([0.9, 0.0]), goal_threshold=0.1):
+    def __init__(self, xml_path='nav1.xml', goal_coords=np.array([0.9, 0.0]), goal_threshold=0.5):
         self.model = mujoco.MjModel.from_xml_path(xml_path)
         self.data = mujoco.MjData(self.model)
         self.goal_coords = goal_coords
@@ -21,35 +21,34 @@ class BallNavigationEnv(gym.Env):
         return self._get_state()
 
     def step(self, action):
-        # Add noise to the action as per the assignment
-        noise = np.random.normal(0, 0.1, size=2)
+        noise = np.random.normal(0, 0.05, size=2)
         self.data.ctrl[:2] = action + noise
 
-        # Simulate one timestep
         mujoco.mj_step(self.model, self.data)
 
-        # Retrieve state and calculate reward
         state = self._get_state()
         reward = self._compute_reward(state)
+        # print(state, reward)
         done = self._check_termination(state)
         # print(f"State: {state[:2]}, Goal: {self.goal_coords}, Reward: {reward}")
         return state, reward, done, {}
 
     def _get_state(self):
         # Combine position and velocity into a single state vector
+        
         pos = self.data.qpos[:2].astype(np.float32)
         vel = self.data.qvel[:2].astype(np.float32)
         return np.concatenate([pos, vel])
 
     def _compute_reward(self, state):
-        distance = np.linalg.norm(state[:2] - self.goal_coords)
+        dist = np.linalg.norm(state[:2] - self.goal_coords)
         
         # Reward for reaching the goal
-        if distance <= self.goal_threshold:
-            return 1
+        if dist <= self.goal_threshold:
+            return 1.0
         
         # Penalty proportional to distance from the goal
-        return -distance
+        return 0.0
 
     def _check_termination(self, state):
         distance = np.linalg.norm(state[:2] - self.goal_coords)

@@ -44,18 +44,22 @@ class ActorCriticAgent:
             _, _, value_ = self.actor_critic(state_)
             value = tf.squeeze(value)
             value_ = tf.squeeze(value_)
-            dist = tfp.distributions.Normal(tf.cast(mu, tf.float32), tf.cast(sigma, tf.float32))
-            log_prob = dist.log_prob(self.action)
+            
             delta = reward + self.gamma * value_ * (1 - int(done)) - value
             critic_loss = delta**2
+
+            dist = tfp.distributions.Normal(tf.cast(mu, tf.float32), tf.cast(sigma, tf.float32))
+            # log_prob = dist.log_prob(self.action)
             
             actor_loss = -log_prob * delta
-            entropy_bonus = tf.reduce_mean(dist.entropy())  # Higher entropy encourages exploration
+            entropy_bonus = tf.reduce_mean(dist.entropy()) 
             actor_loss -= 0.01 * entropy_bonus
             total_loss = critic_loss + actor_loss
         
-        grads = tape.gradient(total_loss, self.actor_critic.trainable_variables)
-        for var, grad in zip(self.actor_critic.trainable_variables, grads):
-            if grad is None or tf.reduce_mean(grad).numpy() == 0:
-                print(f"Zero gradient for {var.name}")
 
+        grads = tape.gradient(total_loss, self.actor_critic.trainable_variables)
+        # for var, grad in zip(self.actor_critic.trainable_variables, grads):
+        #     if grad is None or tf.reduce_mean(grad).numpy() == 0:
+        #         print(f"Zero gradient for {var.name}")
+
+        self.actor_critic.optimizer.apply_gradients(zip(grads, self.actor_critic.trainable_variables))
